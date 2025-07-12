@@ -62,6 +62,7 @@ func handleConnection(conn net.Conn) {
 	command, err := parseCommand(scanner)
 	if err != nil {
 		conn.Write([]byte("-ERR " + err.Error() + CRLF))
+		return
 	}
 
 	switch command {
@@ -71,6 +72,7 @@ func handleConnection(conn net.Conn) {
 			args, err := parseArguments(scanner, commandArrayLength)
 			if err != nil {
 				conn.Write([]byte("-ERR " + err.Error() + CRLF))
+				return
 			}
 
 			bulk := strings.Join(args, " ");
