@@ -68,6 +68,7 @@ func handleConnection(conn net.Conn) {
 	switch command {
 		case "PING": 
 			conn.Write([]byte("+PONG" + CRLF))
+			return
 		case "ECHO": 
 			args, err := parseArguments(scanner, commandArrayLength)
 			if err != nil {
@@ -77,8 +78,10 @@ func handleConnection(conn net.Conn) {
 
 			bulk := strings.Join(args, " ");
 			conn.Write([]byte("$" + strconv.Itoa(len(bulk)) + CRLF + bulk + CRLF))
+			return
 		default:
 			conn.Write([]byte("-ERR unknown command" + CRLF))
+			return
 	}
 }
 
