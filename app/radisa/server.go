@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
 )
+
+const CRLF = "\r\n"
 
 // om du vet, du vet
 type Radisa struct {
@@ -41,12 +44,77 @@ func handleConnection(conn net.Conn) {
 	defer conn.Close()
 
 	scanner := bufio.NewScanner(conn)
-	for scanner.Scan() {
-		text := scanner.Text()
-		if strings.TrimSpace(text) == "PING" {
-			conn.Write([]byte("+PONG\r\n"))
-		}
+	scanner.Scan()
+	commandArrayLengthToken := scanner.Text()
+	if !strings.HasPrefix(commandArrayLengthToken, "*") {
+		fmt.Println("Invalid command format")
+		conn.Write([]byte("-ERR invalid command format" + CRLF))
+		return
+	}
+
+	commandArrayLength, err := strconv.Atoi(strings.TrimPrefix(commandArrayLengthToken, "*"))
+	if err != nil {
+		fmt.Println("Invalid array length")
+		conn.Write([]byte("-ERR invalid array length" + CRLF))
+		return
+	}
+
+	command, err := parseCommand(scanner)
+	if err != nil {
+		conn.Write([]byte("-ERR " + err.Error() + CRLF))
+	}
+
+	switch command {
+		case "PING": 
+			conn.Write([]byte("+PONG" + CRLF))
+		case "ECHO": 
+			args, err := parseArguments(scanner, commandArrayLength)
+			if err != nil {
+				conn.Write([]byte("-ERR " + err.Error() + CRLF))
+			}
+
+			bulk := strings.Join(args, " ");
+			conn.Write([]byte("$" + strconv.Itoa(len(bulk)) + CRLF + bulk + CRLF))
+		default:
+			conn.Write([]byte("-ERR unknown command" + CRLF))
 	}
 }
 
+func parseCommand(scanner *bufio.Scanner) (string, error) {
+	if !scanner.Scan() {
+		return "", fmt.Errorf("failed to read length of the command")
+	}
+
+	if !strings.HasPrefix(scanner.Text(), "$") {
+		return "", fmt.Errorf("invalid command format, expected '$' prefix followed by length")
+	}
+
+	if !scanner.Scan() {
+		return "", fmt.Errorf("failed to read command")
+	}
+
+	return strings.TrimSpace(scanner.Text()), nil
+}
+
+func parseArguments(scanner *bufio.Scanner, argsLen int) ([]string, error) {
+	args := make([]string, 0)
+	for i := 1; i < argsLen; i++ {
+		fmt.Printf("Parsing argument %d\n", i)
+		if !scanner.Scan() {
+			return args, fmt.Errorf("failed to read length of the argument")
+		}
+
+		if !strings.HasPrefix(scanner.Text(), "$") {
+			return args, fmt.Errorf("invalid argument format, expected '$' prefix followed by length")
+		}
+
+		if !scanner.Scan() {
+			return args, fmt.Errorf("failed to read argument")
+		}
+
+		args = append(args, strings.TrimSpace(scanner.Text()))
+	}
+
+	return args, nil
+}	
 
