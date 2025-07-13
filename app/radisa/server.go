@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 const CRLF = "\r\n"
@@ -17,6 +18,7 @@ const NULL_BULK_STR = "$-1" + CRLF
 type Radisa struct {
 	Port int
 	data map[string]string
+	expires map[string]time.Time
 	mu sync.RWMutex
 }
 
@@ -24,6 +26,7 @@ func NewRadisa() *Radisa {
 	return &Radisa{
 		Port: 6379, // Default Redis port
 		data: make(map[string]string),
+		expires: make(map[string]time.Time),
 		mu:   sync.RWMutex{},
 	}
 }
@@ -104,6 +107,18 @@ func (r *Radisa)handleConnection(conn net.Conn) {
 				r.data[args[0]] = args[1]
 				r.mu.Unlock()
 
+				// We gonna handle only PX argument for now
+				if len(args) > 2 && strings.ToUpper(args[2]) == "PX" {
+					duration, err := strconv.Atoi(args[3])
+					if err != nil {
+						conn.Write([]byte("-ERR invalid duration for PX argument" + CRLF))
+						continue	
+					}		
+
+					r.mu.Lock()				
+					r.expires[args[0]] = time.Now().Add(time.Duration(duration) * time.Millisecond)
+					r.mu.Unlock()	
+				}
 				conn.Write([]byte("+OK" + CRLF))
 			case "GET":
 				args, err := parseArguments(scanner, commandArrayLength)
@@ -117,16 +132,27 @@ func (r *Radisa)handleConnection(conn net.Conn) {
 					continue
 				}
 
-				r.mu.RLock()
-				value, exists := r.data[args[0]]
-				r.mu.RUnlock()	
-
-				if !exists {
+				exp, exists := r.expires[args[0]]
+				if exists && time.Now().After(exp) {
 					conn.Write([]byte(NULL_BULK_STR))
+					r.mu.Lock()
+					delete(r.data, args[0])
+					delete(r.expires, args[0])
+					r.mu.Unlock()
 					continue
+				} else {
+					r.mu.RLock()
+					value, exists := r.data[args[0]]
+					r.mu.RUnlock()	
+	
+					if !exists {
+						conn.Write([]byte(NULL_BULK_STR))
+						continue
+					}
+	
+					conn.Write([]byte("$" + strconv.Itoa(len(value)) + CRLF + value + CRLF))
 				}
 
-				conn.Write([]byte("$" + strconv.Itoa(len(value)) + CRLF + value + CRLF))
 			default:
 				conn.Write([]byte("-ERR unknown command" + CRLF))
 		}
@@ -146,7 +172,7 @@ func parseCommand(scanner *bufio.Scanner) (string, error) {
 		return "", fmt.Errorf("failed to read command")
 	}
 
-	return strings.TrimSpace(scanner.Text()), nil
+	return strings.ToUpper(strings.TrimSpace(scanner.Text())), nil
 }
 
 func parseArguments(scanner *bufio.Scanner, argsLen int) ([]string, error) {
@@ -164,6 +190,7 @@ func parseArguments(scanner *bufio.Scanner, argsLen int) ([]string, error) {
 			return args, fmt.Errorf("failed to read argument")
 		}
 
+		
 		args = append(args, strings.TrimSpace(scanner.Text()))
 	}
 
