@@ -42,47 +42,53 @@ func (r *Radisa) Start() error {
 
 func handleConnection(conn net.Conn) {
 	defer conn.Close()
-
+	
 	scanner := bufio.NewScanner(conn)
-	scanner.Scan()
-	commandArrayLengthToken := scanner.Text()
-	if !strings.HasPrefix(commandArrayLengthToken, "*") {
-		fmt.Println("Invalid command format")
-		conn.Write([]byte("-ERR invalid command format" + CRLF))
-		return
-	}
-
-	commandArrayLength, err := strconv.Atoi(strings.TrimPrefix(commandArrayLengthToken, "*"))
-	if err != nil {
-		fmt.Println("Invalid array length")
-		conn.Write([]byte("-ERR invalid array length" + CRLF))
-		return
-	}
-
-	command, err := parseCommand(scanner)
-	if err != nil {
-		conn.Write([]byte("-ERR " + err.Error() + CRLF))
-		return
-	}
-
-	switch command {
-		case "PING": 
-			conn.Write([]byte("+PONG" + CRLF))
+	
+	for {
+		if !scanner.Scan() {
 			return
-		case "ECHO": 
-			args, err := parseArguments(scanner, commandArrayLength)
-			if err != nil {
-				conn.Write([]byte("-ERR " + err.Error() + CRLF))
+		}
+
+		commandArrayLengthToken := scanner.Text()
+		if !strings.HasPrefix(commandArrayLengthToken, "*") {
+			fmt.Println("Invalid command format")
+			conn.Write([]byte("-ERR invalid command format" + CRLF))
+			return
+		}
+
+		commandArrayLength, err := strconv.Atoi(strings.TrimPrefix(commandArrayLengthToken, "*"))
+		if err != nil {
+			fmt.Println("Invalid array length")
+			conn.Write([]byte("-ERR invalid array length" + CRLF))
+			return
+		}
+
+		command, err := parseCommand(scanner)
+		if err != nil {
+			conn.Write([]byte("-ERR " + err.Error() + CRLF))
+			return
+		}
+
+		switch command {
+			case "PING": 
+				conn.Write([]byte("+PONG" + CRLF))
 				return
-			}
+			case "ECHO": 
+				args, err := parseArguments(scanner, commandArrayLength)
+				if err != nil {
+					conn.Write([]byte("-ERR " + err.Error() + CRLF))
+					return
+				}
 
-			bulk := strings.Join(args, " ");
-			conn.Write([]byte("$" + strconv.Itoa(len(bulk)) + CRLF + bulk + CRLF))
-			return
-		default:
-			conn.Write([]byte("-ERR unknown command" + CRLF))
-			return
-	}
+				bulk := strings.Join(args, " ");
+				conn.Write([]byte("$" + strconv.Itoa(len(bulk)) + CRLF + bulk + CRLF))
+				return
+			default:
+				conn.Write([]byte("-ERR unknown command" + CRLF))
+				return
+		}
+	}	
 }
 
 func parseCommand(scanner *bufio.Scanner) (string, error) {
