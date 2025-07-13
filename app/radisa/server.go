@@ -7,18 +7,24 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 const CRLF = "\r\n"
+const NULL_BULK_STR = "$-1" + CRLF
 
 // om du vet, du vet
 type Radisa struct {
 	Port int
+	data map[string]string
+	mu sync.RWMutex
 }
 
 func NewRadisa() *Radisa {
 	return &Radisa{
 		Port: 6379, // Default Redis port
+		data: make(map[string]string),
+		mu:   sync.RWMutex{},
 	}
 }
 
@@ -36,11 +42,11 @@ func (r *Radisa) Start() error {
 			continue
 		}
 		
-		go handleConnection(conn)
+		go r.handleConnection(conn)
 	}
 }
 
-func handleConnection(conn net.Conn) {
+func (r *Radisa)handleConnection(conn net.Conn) {
 	defer conn.Close()
 	
 	scanner := bufio.NewScanner(conn)
@@ -82,6 +88,45 @@ func handleConnection(conn net.Conn) {
 
 				bulk := strings.Join(args, " ");
 				conn.Write([]byte("$" + strconv.Itoa(len(bulk)) + CRLF + bulk + CRLF))
+			case "SET":
+				args, err := parseArguments(scanner, commandArrayLength)
+				if err != nil {
+					conn.Write([]byte("-ERR " + err.Error() + CRLF))
+					continue
+				}
+
+				if len(args) < 2 {
+					conn.Write([]byte("-ERR wrong number of arguments for 'set' command" + CRLF))
+					continue
+				}
+
+				r.mu.Lock()
+				r.data[args[0]] = args[1]
+				r.mu.Unlock()
+
+				conn.Write([]byte("+OK" + CRLF))
+			case "GET":
+				args, err := parseArguments(scanner, commandArrayLength)
+				if err != nil {
+					conn.Write([]byte("-ERR " + err.Error() + CRLF))
+					continue
+				}
+
+				if len(args) < 1 {
+					conn.Write([]byte("-ERR wrong number of arguments for 'get' command" + CRLF))
+					continue
+				}
+
+				r.mu.RLock()
+				value, exists := r.data[args[0]]
+				r.mu.RUnlock()	
+
+				if !exists {
+					conn.Write([]byte(NULL_BULK_STR))
+					continue
+				}
+
+				conn.Write([]byte("$" + strconv.Itoa(len(value)) + CRLF + value + CRLF))
 			default:
 				conn.Write([]byte("-ERR unknown command" + CRLF))
 		}
@@ -107,7 +152,6 @@ func parseCommand(scanner *bufio.Scanner) (string, error) {
 func parseArguments(scanner *bufio.Scanner, argsLen int) ([]string, error) {
 	args := make([]string, 0)
 	for i := 1; i < argsLen; i++ {
-		fmt.Printf("Parsing argument %d\n", i)
 		if !scanner.Scan() {
 			return args, fmt.Errorf("failed to read length of the argument")
 		}
