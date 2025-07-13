@@ -54,39 +54,36 @@ func handleConnection(conn net.Conn) {
 		if !strings.HasPrefix(commandArrayLengthToken, "*") {
 			fmt.Println("Invalid command format")
 			conn.Write([]byte("-ERR invalid command format" + CRLF))
-			return
+			continue
 		}
 
 		commandArrayLength, err := strconv.Atoi(strings.TrimPrefix(commandArrayLengthToken, "*"))
 		if err != nil {
 			fmt.Println("Invalid array length")
 			conn.Write([]byte("-ERR invalid array length" + CRLF))
-			return
+			continue
 		}
 
 		command, err := parseCommand(scanner)
 		if err != nil {
 			conn.Write([]byte("-ERR " + err.Error() + CRLF))
-			return
+			continue
 		}
 
 		switch command {
 			case "PING": 
 				conn.Write([]byte("+PONG" + CRLF))
-				return
 			case "ECHO": 
 				args, err := parseArguments(scanner, commandArrayLength)
 				if err != nil {
 					conn.Write([]byte("-ERR " + err.Error() + CRLF))
-					return
+					continue
 				}
 
 				bulk := strings.Join(args, " ");
 				conn.Write([]byte("$" + strconv.Itoa(len(bulk)) + CRLF + bulk + CRLF))
-				return
 			default:
 				conn.Write([]byte("-ERR unknown command" + CRLF))
-				return
 		}
 	}	
 }
