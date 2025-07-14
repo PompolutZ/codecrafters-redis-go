@@ -20,14 +20,18 @@ type Radisa struct {
 	data map[string]string
 	expires map[string]time.Time
 	mu sync.RWMutex
+	dir string
+	dbfilename string
 }
 
-func NewRadisa() *Radisa {
+func NewRadisa(dir string, dbfilename string) *Radisa {
 	return &Radisa{
 		Port: 6379, // Default Redis port
 		data: make(map[string]string),
 		expires: make(map[string]time.Time),
 		mu:   sync.RWMutex{},
+		dir: dir,
+		dbfilename: dbfilename,
 	}
 }
 
@@ -153,6 +157,22 @@ func (r *Radisa)handleConnection(conn net.Conn) {
 					conn.Write([]byte("$" + strconv.Itoa(len(value)) + CRLF + value + CRLF))
 				}
 
+			case "CONFIG": 
+				args, err := parseArguments(scanner, commandArrayLength)
+				if err != nil {
+					conn.Write([]byte("-ERR " + err.Error() + CRLF))
+					continue
+				}
+
+				if args[0] == "GET" && len(args) == 2 && args[1] == "dir" {
+					conn.Write([]byte("*2" + CRLF + toBulkString("dir") + toBulkString(r.dir)))
+					continue
+				}
+
+				if args[0] == "GET" && len(args) == 2 && args[1] == "dbfilename" {
+					conn.Write([]byte("*2" + CRLF + toBulkString("dbfilename") + toBulkString(r.dbfilename)))
+					continue
+				}
 			default:
 				conn.Write([]byte("-ERR unknown command" + CRLF))
 		}
@@ -195,5 +215,9 @@ func parseArguments(scanner *bufio.Scanner, argsLen int) ([]string, error) {
 	}
 
 	return args, nil
-}	
+}
+
+func toBulkString(value string) string {
+	return "$" + strconv.Itoa(len(value)) + CRLF + value + CRLF
+}
 
