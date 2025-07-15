@@ -3,8 +3,10 @@ package radisa
 import (
 	"bufio"
 	"fmt"
+	"maps"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,9 +27,17 @@ type Radisa struct {
 }
 
 func NewRadisa(dir string, dbfilename string) *Radisa {
+	file, err := os.ReadFile(dir + "/" + dbfilename)
+	if err != nil {
+		fmt.Printf("Error reading RDB file: %v\n", err)
+		os.Exit(1)
+	}
+
+	parser := NewRDBParser(file)
+
 	return &Radisa{
 		Port: 6379, // Default Redis port
-		data: make(map[string]string),
+		data: parser.Parse(),
 		expires: make(map[string]time.Time),
 		mu:   sync.RWMutex{},
 		dir: dir,
@@ -173,6 +183,29 @@ func (r *Radisa)handleConnection(conn net.Conn) {
 					conn.Write([]byte("*2" + CRLF + toBulkString("dbfilename") + toBulkString(r.dbfilename)))
 					continue
 				}
+			case "KEYS":
+				args, err := parseArguments(scanner, commandArrayLength)
+				if err != nil {
+					conn.Write([]byte("-ERR " + err.Error() + CRLF))
+					continue
+				}
+
+				if len(args) < 1 {
+					conn.Write([]byte("-ERR wrong number of arguments for 'keys' command" + CRLF))
+					continue
+				}
+
+				pattern := args[0]
+				r.mu.RLock()
+				keys := SearchKeys(pattern, slices.Collect(maps.Keys(r.data)))
+				r.mu.RUnlock()
+
+				bulkStrings := make([]string, len(keys))
+				for i, key := range keys {
+					bulkStrings[i] = toBulkString(key)
+				}
+
+				conn.Write([]byte("*" + strconv.Itoa(len(bulkStrings)) + CRLF + strings.Join(bulkStrings, "")))
 			default:
 				conn.Write([]byte("-ERR unknown command" + CRLF))
 		}
