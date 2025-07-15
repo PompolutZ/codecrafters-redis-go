@@ -30,7 +30,15 @@ func NewRadisa(dir string, dbfilename string) *Radisa {
 	file, err := os.ReadFile(dir + "/" + dbfilename)
 	if err != nil {
 		fmt.Printf("Error reading RDB file: %v\n", err)
-		os.Exit(1)
+
+		return &Radisa{
+			Port: 6379, // Default Redis port
+			data: make(map[string]string),
+			expires: make(map[string]time.Time),
+			mu:   sync.RWMutex{},
+			dir: dir,
+			dbfilename: dbfilename,
+		}
 	}
 
 	parser := NewRDBParser(file)
