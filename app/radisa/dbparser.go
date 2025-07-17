@@ -3,23 +3,24 @@ package radisa
 import (
 	"encoding/binary"
 	"fmt"
+	"time"
 )
 
 type RDBParser struct {
-	keyVals map[string]string
+	keyVals map[string]Data
 	data []byte
 	pos  int
 }
 
 func NewRDBParser(data []byte) *RDBParser {
 	return &RDBParser{
-		keyVals: make(map[string]string),
+		keyVals: make(map[string]Data),
 		data: data,
 		pos:  0,
 	}
 }
 
-func (p *RDBParser) Parse() map[string]string {
+func (p *RDBParser) Parse() map[string]Data {
 	// Parse header
 	if !p.parseHeader() {
 		return p.keyVals
@@ -160,7 +161,18 @@ func (p *RDBParser) parseKeyValuePairs() {
 			return
 		}
 
-		p.keyVals[key] = fmt.Sprintf("%v", value)
+		expire := time.Time{}
+
+		if expireType == "seconds" {
+			expire = time.Unix(expireTime, 0)
+		} else {
+			expire = time.UnixMilli(expireTime)
+		}
+
+		p.keyVals[key] = Data{
+			value: fmt.Sprintf("%v", value),
+			expire: expire,
+		}
 		
 		fmt.Printf("Key: %s\n", key)
 		fmt.Printf("Value: %v\n", value)

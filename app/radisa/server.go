@@ -16,11 +16,15 @@ import (
 const CRLF = "\r\n"
 const NULL_BULK_STR = "$-1" + CRLF
 
+type Data struct {
+	value string
+	expire time.Time	
+}
+
 // om du vet, du vet
 type Radisa struct {
 	Port int
-	data map[string]string
-	expires map[string]time.Time
+	data map[string]Data
 	mu sync.RWMutex
 	dir string
 	dbfilename string
@@ -33,8 +37,7 @@ func NewRadisa(dir string, dbfilename string) *Radisa {
 
 		return &Radisa{
 			Port: 6379, // Default Redis port
-			data: make(map[string]string),
-			expires: make(map[string]time.Time),
+			data: make(map[string]Data),
 			mu:   sync.RWMutex{},
 			dir: dir,
 			dbfilename: dbfilename,
@@ -46,7 +49,6 @@ func NewRadisa(dir string, dbfilename string) *Radisa {
 	return &Radisa{
 		Port: 6379, // Default Redis port
 		data: parser.Parse(),
-		expires: make(map[string]time.Time),
 		mu:   sync.RWMutex{},
 		dir: dir,
 		dbfilename: dbfilename,
@@ -125,9 +127,8 @@ func (r *Radisa)handleConnection(conn net.Conn) {
 					continue
 				}
 
-				r.mu.Lock()
-				r.data[args[0]] = args[1]
-				r.mu.Unlock()
+				value := args[1]
+				expires := time.Time{}
 
 				// We gonna handle only PX argument for now
 				if len(args) > 2 && strings.ToUpper(args[2]) == "PX" {
@@ -137,10 +138,16 @@ func (r *Radisa)handleConnection(conn net.Conn) {
 						continue	
 					}		
 
-					r.mu.Lock()				
-					r.expires[args[0]] = time.Now().Add(time.Duration(duration) * time.Millisecond)
-					r.mu.Unlock()	
+					expires = time.Now().Add(time.Duration(duration) * time.Millisecond)
 				}
+
+				r.mu.Lock()
+				r.data[args[0]] = Data{
+					value: value,
+					expire: expires,
+				}
+				r.mu.Unlock()
+
 				conn.Write([]byte("+OK" + CRLF))
 			case "GET":
 				args, err := parseArguments(scanner, commandArrayLength)
@@ -154,27 +161,24 @@ func (r *Radisa)handleConnection(conn net.Conn) {
 					continue
 				}
 
-				exp, exists := r.expires[args[0]]
-				if exists && time.Now().After(exp) {
+				r.mu.RLock()
+				value, exists := r.data[args[0]]
+				r.mu.RUnlock()	
+
+				if !exists {
+					conn.Write([]byte(NULL_BULK_STR))
+					continue
+				}
+	
+				if !value.expire.IsZero() && time.Now().After(value.expire) {
 					conn.Write([]byte(NULL_BULK_STR))
 					r.mu.Lock()
 					delete(r.data, args[0])
-					delete(r.expires, args[0])
 					r.mu.Unlock()
 					continue
-				} else {
-					r.mu.RLock()
-					value, exists := r.data[args[0]]
-					r.mu.RUnlock()	
-	
-					if !exists {
-						conn.Write([]byte(NULL_BULK_STR))
-						continue
-					}
-	
-					conn.Write([]byte("$" + strconv.Itoa(len(value)) + CRLF + value + CRLF))
 				}
 
+				conn.Write([]byte("$" + strconv.Itoa(len(value.value)) + CRLF + value.value + CRLF))
 			case "CONFIG": 
 				args, err := parseArguments(scanner, commandArrayLength)
 				if err != nil {
