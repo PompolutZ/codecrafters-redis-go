@@ -161,12 +161,13 @@ func (p *RDBParser) parseKeyValuePairs() {
 			return
 		}
 
-		expire := time.Time{}
-
-		if expireType == "seconds" {
-			expire = time.Unix(expireTime, 0)
-		} else {
-			expire = time.UnixMilli(expireTime)
+		var expire time.Time
+		if expireTime != -1 {
+			if expireType == "seconds" {
+				expire = time.Unix(expireTime, 0)
+			} else {
+				expire = time.UnixMilli(expireTime)
+			}
 		}
 
 		p.keyVals[key] = Data{

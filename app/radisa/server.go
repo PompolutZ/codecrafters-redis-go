@@ -169,7 +169,7 @@ func (r *Radisa)handleConnection(conn net.Conn) {
 					conn.Write([]byte(NULL_BULK_STR))
 					continue
 				}
-	
+
 				if !value.expire.IsZero() && time.Now().After(value.expire) {
 					conn.Write([]byte(NULL_BULK_STR))
 					r.mu.Lock()
