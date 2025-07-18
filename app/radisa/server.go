@@ -73,196 +73,127 @@ func (r *Radisa) Start() error {
 	}
 }
 
-func (r *Radisa)handleConnection(conn net.Conn) {
+func (r *Radisa) handleConnection(conn net.Conn) {
 	defer conn.Close()
 	
 	scanner := bufio.NewScanner(conn)
+	parser := NewRESPParser(scanner)
 	
 	for {
-		if !scanner.Scan() {
-			return
-		}
-
-		commandArrayLengthToken := scanner.Text()
-		if !strings.HasPrefix(commandArrayLengthToken, "*") {
-			fmt.Println("Invalid command format")
-			conn.Write([]byte("-ERR invalid command format" + CRLF))
-			continue
-		}
-
-		commandArrayLength, err := strconv.Atoi(strings.TrimPrefix(commandArrayLengthToken, "*"))
+		// Parse RESP command
+		cmd, err := parser.ParseCommand()
 		if err != nil {
-			fmt.Println("Invalid array length")
-			conn.Write([]byte("-ERR invalid array length" + CRLF))
+			// Check if it's EOF (client disconnected)
+			if err.Error() == "failed to read command" {
+				return
+			}
+			conn.Write(FormatError(err.Error()))
 			continue
 		}
 
-		command, err := parseCommand(scanner)
-		if err != nil {
-			conn.Write([]byte("-ERR " + err.Error() + CRLF))
-			continue
-		}
-
-		switch command {
-			case "PING": 
-				conn.Write([]byte("+PONG" + CRLF))
-			case "ECHO": 
-				args, err := parseArguments(scanner, commandArrayLength)
-				if err != nil {
-					conn.Write([]byte("-ERR " + err.Error() + CRLF))
-					continue
-				}
-
-				bulk := strings.Join(args, " ");
-				conn.Write([]byte("$" + strconv.Itoa(len(bulk)) + CRLF + bulk + CRLF))
-			case "SET":
-				args, err := parseArguments(scanner, commandArrayLength)
-				if err != nil {
-					conn.Write([]byte("-ERR " + err.Error() + CRLF))
-					continue
-				}
-
-				if len(args) < 2 {
-					conn.Write([]byte("-ERR wrong number of arguments for 'set' command" + CRLF))
-					continue
-				}
-
-				value := args[1]
-				expires := time.Time{}
-
-				// We gonna handle only PX argument for now
-				if len(args) > 2 && strings.ToUpper(args[2]) == "PX" {
-					duration, err := strconv.Atoi(args[3])
-					if err != nil {
-						conn.Write([]byte("-ERR invalid duration for PX argument" + CRLF))
-						continue	
-					}		
-
-					expires = time.Now().Add(time.Duration(duration) * time.Millisecond)
-				}
-
-				r.mu.Lock()
-				r.data[args[0]] = Data{
-					value: value,
-					expire: expires,
-				}
-				r.mu.Unlock()
-
-				conn.Write([]byte("+OK" + CRLF))
-			case "GET":
-				args, err := parseArguments(scanner, commandArrayLength)
-				if err != nil {
-					conn.Write([]byte("-ERR " + err.Error() + CRLF))
-					continue
-				}
-
-				if len(args) < 1 {
-					conn.Write([]byte("-ERR wrong number of arguments for 'get' command" + CRLF))
-					continue
-				}
-
-				r.mu.RLock()
-				value, exists := r.data[args[0]]
-				r.mu.RUnlock()	
-
-				if !exists {
-					conn.Write([]byte(NULL_BULK_STR))
-					continue
-				}
-
-				if !value.expire.IsZero() && time.Now().After(value.expire) {
-					conn.Write([]byte(NULL_BULK_STR))
-					r.mu.Lock()
-					delete(r.data, args[0])
-					r.mu.Unlock()
-					continue
-				}
-
-				conn.Write([]byte("$" + strconv.Itoa(len(value.value)) + CRLF + value.value + CRLF))
-			case "CONFIG": 
-				args, err := parseArguments(scanner, commandArrayLength)
-				if err != nil {
-					conn.Write([]byte("-ERR " + err.Error() + CRLF))
-					continue
-				}
-
-				if args[0] == "GET" && len(args) == 2 && args[1] == "dir" {
-					conn.Write([]byte("*2" + CRLF + toBulkString("dir") + toBulkString(r.dir)))
-					continue
-				}
-
-				if args[0] == "GET" && len(args) == 2 && args[1] == "dbfilename" {
-					conn.Write([]byte("*2" + CRLF + toBulkString("dbfilename") + toBulkString(r.dbfilename)))
-					continue
-				}
-			case "KEYS":
-				args, err := parseArguments(scanner, commandArrayLength)
-				if err != nil {
-					conn.Write([]byte("-ERR " + err.Error() + CRLF))
-					continue
-				}
-
-				if len(args) < 1 {
-					conn.Write([]byte("-ERR wrong number of arguments for 'keys' command" + CRLF))
-					continue
-				}
-
-				pattern := args[0]
-				r.mu.RLock()
-				keys := SearchKeys(pattern, slices.Collect(maps.Keys(r.data)))
-				r.mu.RUnlock()
-
-				bulkStrings := make([]string, len(keys))
-				for i, key := range keys {
-					bulkStrings[i] = toBulkString(key)
-				}
-
-				conn.Write([]byte("*" + strconv.Itoa(len(bulkStrings)) + CRLF + strings.Join(bulkStrings, "")))
-			default:
-				conn.Write([]byte("-ERR unknown command" + CRLF))
-		}
+		// Execute command and send response
+		response := r.executeCommand(cmd)
+		conn.Write(response)
 	}	
 }
 
-func parseCommand(scanner *bufio.Scanner) (string, error) {
-	if !scanner.Scan() {
-		return "", fmt.Errorf("failed to read length of the command")
-	}
 
-	if !strings.HasPrefix(scanner.Text(), "$") {
-		return "", fmt.Errorf("invalid command format, expected '$' prefix followed by length")
-	}
 
-	if !scanner.Scan() {
-		return "", fmt.Errorf("failed to read command")
-	}
+// executeCommand processes a parsed command and returns the appropriate RESP response
+func (r *Radisa) executeCommand(cmd *Command) []byte {
+	switch cmd.Name {
+	case "PING":
+		return FormatSimpleString("PONG")
 
-	return strings.ToUpper(strings.TrimSpace(scanner.Text())), nil
-}
+	case "ECHO":
+		if len(cmd.Args) < 1 {
+			return FormatError("wrong number of arguments for 'echo' command")
+		}
+		bulk := strings.Join(cmd.Args, " ")
+		return FormatBulkString(bulk)
 
-func parseArguments(scanner *bufio.Scanner, argsLen int) ([]string, error) {
-	args := make([]string, 0)
-	for i := 1; i < argsLen; i++ {
-		if !scanner.Scan() {
-			return args, fmt.Errorf("failed to read length of the argument")
+	case "SET":
+		if len(cmd.Args) < 2 {
+			return FormatError("wrong number of arguments for 'set' command")
 		}
 
-		if !strings.HasPrefix(scanner.Text(), "$") {
-			return args, fmt.Errorf("invalid argument format, expected '$' prefix followed by length")
+		key := cmd.Args[0]
+		value := cmd.Args[1]
+		expires := time.Time{}
+
+		// Handle PX argument for expiry
+		if len(cmd.Args) > 2 && strings.ToUpper(cmd.Args[2]) == "PX" {
+			if len(cmd.Args) < 4 {
+				return FormatError("invalid duration for PX argument")
+			}
+			duration, err := strconv.Atoi(cmd.Args[3])
+			if err != nil {
+				return FormatError("invalid duration for PX argument")
+			}
+			expires = time.Now().Add(time.Duration(duration) * time.Millisecond)
 		}
 
-		if !scanner.Scan() {
-			return args, fmt.Errorf("failed to read argument")
+		r.mu.Lock()
+		r.data[key] = Data{
+			value:  value,
+			expire: expires,
+		}
+		r.mu.Unlock()
+
+		return FormatSimpleString("OK")
+
+	case "GET":
+		if len(cmd.Args) < 1 {
+			return FormatError("wrong number of arguments for 'get' command")
 		}
 
-		
-		args = append(args, strings.TrimSpace(scanner.Text()))
+		key := cmd.Args[0]
+		r.mu.RLock()
+		value, exists := r.data[key]
+		r.mu.RUnlock()
+
+		if !exists {
+			return FormatNullBulkString()
+		}
+
+		if !value.expire.IsZero() && time.Now().After(value.expire) {
+			r.mu.Lock()
+			delete(r.data, key)
+			r.mu.Unlock()
+			return FormatNullBulkString()
+		}
+
+		return FormatBulkString(value.value)
+
+	case "CONFIG":
+		if len(cmd.Args) < 2 {
+			return FormatError("wrong number of arguments for 'config' command")
+		}
+
+		if cmd.Args[0] == "GET" && cmd.Args[1] == "dir" {
+			return FormatArray([]string{"dir", r.dir})
+		}
+
+		if cmd.Args[0] == "GET" && cmd.Args[1] == "dbfilename" {
+			return FormatArray([]string{"dbfilename", r.dbfilename})
+		}
+
+		return FormatError("unknown config parameter")
+
+	case "KEYS":
+		if len(cmd.Args) < 1 {
+			return FormatError("wrong number of arguments for 'keys' command")
+		}
+
+		pattern := cmd.Args[0]
+		r.mu.RLock()
+		keys := SearchKeys(pattern, slices.Collect(maps.Keys(r.data)))
+		r.mu.RUnlock()
+
+		return FormatArray(keys)
+
+	default:
+		return FormatError("unknown command")
 	}
-
-	return args, nil
-}
-
-func toBulkString(value string) string {
-	return "$" + strconv.Itoa(len(value)) + CRLF + value + CRLF
 }
 
