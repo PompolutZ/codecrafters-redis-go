@@ -30,13 +30,13 @@ type Radisa struct {
 	dbfilename string
 }
 
-func NewRadisa(dir string, dbfilename string) *Radisa {
+func NewRadisa(dir string, dbfilename string, port int) *Radisa {
 	file, err := os.ReadFile(dir + "/" + dbfilename)
 	if err != nil {
 		fmt.Printf("Error reading RDB file: %v\n", err)
 
 		return &Radisa{
-			Port: 6379, // Default Redis port
+			Port: port, // Default Redis port
 			data: make(map[string]Data),
 			mu:   sync.RWMutex{},
 			dir: dir,
@@ -47,7 +47,7 @@ func NewRadisa(dir string, dbfilename string) *Radisa {
 	parser := NewRDBParser(file)
 
 	return &Radisa{
-		Port: 6379, // Default Redis port
+		Port: port,
 		data: parser.Parse(),
 		mu:   sync.RWMutex{},
 		dir: dir,
