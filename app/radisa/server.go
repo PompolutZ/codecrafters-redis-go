@@ -192,6 +192,9 @@ func (r *Radisa) executeCommand(cmd *Command) []byte {
 
 		return FormatArray(keys)
 
+	case "INFO":
+		return FormatBulkString("role:master")
+
 	default:
 		return FormatError("unknown command")
 	}
