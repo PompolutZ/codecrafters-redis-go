@@ -21,6 +21,11 @@ type Data struct {
 	expire time.Time	
 }
 
+type ReplicaOf struct {
+	masterHost string
+	masterPort int
+}
+
 // om du vet, du vet
 type Radisa struct {
 	Port int
@@ -28,10 +33,36 @@ type Radisa struct {
 	mu sync.RWMutex
 	dir string
 	dbfilename string
+	replicaOf *ReplicaOf
+}
+
+func NewReplica(dir string, dbfilename string, port int, replicaof string) *Radisa {
+	replica := NewRadisa(dir, dbfilename, port);
+	masterInfo := strings.Split(replicaof, " ");
+	
+	if len(masterInfo) < 2 {
+		fmt.Printf("Ooopsan, replicaof requires 2 arguments but found %d\n", len(masterInfo))
+		return replica
+	}
+
+	masterPort, err := strconv.Atoi(masterInfo[1]);
+	if err != nil {
+		fmt.Printf("Error parsing master port: %v\n", err)
+	}
+
+	replica.replicaOf = &ReplicaOf{
+		masterHost: masterInfo[0],
+		masterPort: masterPort,
+	}
+
+	return replica
 }
 
 func NewRadisa(dir string, dbfilename string, port int) *Radisa {
 	file, err := os.ReadFile(dir + "/" + dbfilename)
+	// @TODO: This actually is not super smart, since dbfilename is just a flag,
+	// so when not provided we should not print any error and just start redis in 
+	// memory, without restoring snapshot.
 	if err != nil {
 		fmt.Printf("Error reading RDB file: %v\n", err)
 
@@ -41,6 +72,7 @@ func NewRadisa(dir string, dbfilename string, port int) *Radisa {
 			mu:   sync.RWMutex{},
 			dir: dir,
 			dbfilename: dbfilename,
+			replicaOf: nil,
 		}
 	}
 
@@ -52,6 +84,7 @@ func NewRadisa(dir string, dbfilename string, port int) *Radisa {
 		mu:   sync.RWMutex{},
 		dir: dir,
 		dbfilename: dbfilename,
+		replicaOf: nil,
 	}
 }
 
@@ -193,6 +226,10 @@ func (r *Radisa) executeCommand(cmd *Command) []byte {
 		return FormatArray(keys)
 
 	case "INFO":
+		if r.replicaOf != nil {
+			return FormatBulkString("role:slave")
+		}
+		
 		return FormatBulkString("role:master")
 
 	default:
